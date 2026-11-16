@@ -5,7 +5,10 @@
 }
 
 <h1>Upcoming Campus Events</h1>
-
+@if (TempData["ErrorMessage"] is string errorMessage)
+{
+  <p class="error-message" role="alert">@errorMessage</p>
+}
 <form asp-controller="Events"
     asp-action="Index"
     method="get"

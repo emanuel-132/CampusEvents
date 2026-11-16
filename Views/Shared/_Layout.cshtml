@@ -40,6 +40,11 @@
                 asp-controller="Participant"
                 asp-action="Index">Participant Area</a>
             </li>
+            <li>
+              <a class="site-nav-link" asp-controller="Registrations" asp-action="Mine">
+                My Registrations
+              </a>
+            </li>
             @if (User.IsInRole(RoleNames.Organizer))
             {
               <li>

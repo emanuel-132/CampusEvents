@@ -6,55 +6,69 @@ namespace CampusEvents.Data;
 
 public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 {
-	public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options)
-	{
+  public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options)
+  {
 
-	}
+  }
 
-	public DbSet<Category> Categories => Set<Category>();
+  public DbSet<Category> Categories => Set<Category>();
 
-	public DbSet<Event> Events => Set<Event>();
+  public DbSet<Event> Events => Set<Event>();
 
-	protected override void OnModelCreating(ModelBuilder modelBuilder)
-	{
-		base.OnModelCreating(modelBuilder);
+  public DbSet<Registration> Registrations => Set<Registration>();
 
-		modelBuilder.Entity<ApplicationUser>(entity =>
-		{
-			entity.Property(user => user.DisplayName).IsRequired();
-		});
+  protected override void OnModelCreating(ModelBuilder modelBuilder)
+  {
+    base.OnModelCreating(modelBuilder);
 
-		modelBuilder.Entity<Category>(entity =>
-		{
-			entity.Property(category => category.Name).IsRequired();
-		});
+    modelBuilder.Entity<ApplicationUser>(entity =>
+    {
+      entity.Property(user => user.DisplayName).IsRequired();
+    });
 
-		modelBuilder.Entity<Event>(entity =>
-		{
-			entity.Property(eventItem => eventItem.Title).IsRequired();
-			entity.Property(eventItem => eventItem.Description).IsRequired();
-			entity.Property(eventItem => eventItem.Location).IsRequired();
+    modelBuilder.Entity<Category>(entity =>
+    {
+      entity.Property(category => category.Name).IsRequired();
+    });
 
-			entity.HasOne(eventItem => eventItem.Category)
-				.WithMany(category => category.Events)
-				.HasForeignKey(eventItem => eventItem.CategoryId)
-				.OnDelete(DeleteBehavior.Restrict);
+    modelBuilder.Entity<Event>(entity =>
+    {
+      entity.Property(eventItem => eventItem.Title).IsRequired();
+      entity.Property(eventItem => eventItem.Description).IsRequired();
+      entity.Property(eventItem => eventItem.Location).IsRequired();
 
-			entity.HasOne(eventItem => eventItem.Organizer)
-				.WithMany(user => user.OrganizedEvents)
-				.HasForeignKey(eventItem => eventItem.OrganizerId)
-				.OnDelete(DeleteBehavior.Restrict);
+      entity.HasOne(eventItem => eventItem.Category)
+        .WithMany(category => category.Events)
+        .HasForeignKey(eventItem => eventItem.CategoryId)
+        .OnDelete(DeleteBehavior.Restrict);
 
-			entity.ToTable("Events", table =>
-			{
-				table.HasCheckConstraint(
-					"CK_Events_StartBeforeEnd",
-					"[StartDateTime] < [EndDateTime]");
+      entity.HasOne(eventItem => eventItem.Organizer)
+        .WithMany(user => user.OrganizedEvents)
+        .HasForeignKey(eventItem => eventItem.OrganizerId)
+        .OnDelete(DeleteBehavior.Restrict);
 
-				table.HasCheckConstraint(
-					"CK_Events_CapacityPositive",
-					"[Capacity] > 0");
-			});
-		});
-	}
+      entity.ToTable("Events", table =>
+      {
+        table.HasCheckConstraint(
+          "CK_Events_StartBeforeEnd",
+          "[StartDateTime] < [EndDateTime]");
+
+        table.HasCheckConstraint(
+          "CK_Events_CapacityPositive",
+          "[Capacity] > 0");
+      });
+    });
+
+    modelBuilder.Entity<Registration>(entity =>
+    {
+      entity.HasOne(registration => registration.User).WithMany(user => user.Registrations)
+        .HasForeignKey(registration => registration.UserId).OnDelete(DeleteBehavior.Restrict);
+
+      entity.HasOne(registration => registration.Event).WithMany(eventItem => eventItem.Registrations)
+        .HasForeignKey(registration => registration.EventId).OnDelete(DeleteBehavior.Restrict);
+
+      entity.HasIndex(registration => registration.EventId);
+      entity.HasIndex(registration => new { registration.UserId, registration.EventId }).IsUnique();
+    });
+  }
 }

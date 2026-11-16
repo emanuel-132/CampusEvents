@@ -139,19 +139,38 @@ public class EventsController : Controller
     {
         var eventItem = await _context.Events
             .AsNoTracking()
-            .Include(item => item.Category)
-            .Include(item => item.Organizer)
-            .SingleOrDefaultAsync(item =>
-                item.Id == id &&
-                (item.Status == EventStatus.Published || item.Status == EventStatus.Cancelled));
+            .Include(eventItem => eventItem.Category)
+            .Include(eventItem => eventItem.Organizer)
+            .FirstOrDefaultAsync(eventItem => eventItem.Id == id &&
+                (eventItem.Status == EventStatus.Published || eventItem.Status == EventStatus.Cancelled));
 
-        if (eventItem is null)
+        if (eventItem is null) return NotFound();
+
+        var currentRegistrationCount = await _context.Registrations.CountAsync(registration =>
+                    registration.EventId == eventItem.Id);
+
+        var isCurrentUserRegistered = false;
+
+        if (User.Identity?.IsAuthenticated == true)
         {
-            Response.StatusCode = StatusCodes.Status404NotFound;
-            return View("EventNotFound");
+            var currentUser = await _userManager.GetUserAsync(User);
+
+            if (currentUser is not null)
+            {
+                isCurrentUserRegistered = await _context.Registrations.AnyAsync(registration =>
+                            registration.EventId == eventItem.Id && registration.UserId == currentUser.Id);
+            }
         }
 
-        return View(eventItem);
+        var model = new EventDetailsViewModel
+        {
+            EventItem = eventItem,
+            CurrentRegistrationCount = currentRegistrationCount,
+            RemainingCapacity = Math.Max(0, eventItem.Capacity - currentRegistrationCount),
+            IsCurrentUserRegistered = isCurrentUserRegistered
+        };
+
+        return View(model);
     }
 
     [HttpGet]
@@ -269,25 +288,51 @@ public class EventsController : Controller
     public async Task<IActionResult> Edit(int id, EventInputModel model)
     {
         var organizer = await _userManager.GetUserAsync(User);
-        if (organizer is null) return Challenge();
 
-        var eventItem = await _context.Events
-            .FirstOrDefaultAsync(item => item.Id == id && item.OrganizerId == organizer.Id);
-            
-        if (eventItem is null) return NotFound();
+        if (organizer is null)
+        {
+            return Challenge();
+        }
+
+        await using var transaction = await _context.Database.BeginTransactionAsync();
+
+        var eventItem = await LoadOwnedEventForUpdateAsync(id, organizer.Id);
+
+        if (eventItem is null)
+        {
+            await transaction.RollbackAsync();
+            return NotFound();
+        }
 
         if (eventItem.Status == EventStatus.Cancelled)
         {
+            await transaction.RollbackAsync();
+
             TempData["ErrorMessage"] = "A Cancelled Event can no longer be edited.";
+
             return RedirectToAction(nameof(Manage));
         }
 
-        if (eventItem.Status != EventStatus.Draft && eventItem.Status != EventStatus.Published) return NotFound();
-
         await ValidateCategoryAsync(model);
+
+        if (eventItem.Status == EventStatus.Published && model.Capacity is int proposedCapacity)
+        {
+            var currentRegistrationCount = await _context.Registrations.CountAsync(registration =>
+                        registration.EventId == eventItem.Id);
+
+            if (proposedCapacity < currentRegistrationCount)
+            {
+                ModelState.AddModelError(nameof(EventInputModel.Capacity),
+                    $"Capacity cannot be lower than the current registration count ({currentRegistrationCount}).");
+            }
+        }
+
         if (!ModelState.IsValid)
         {
+            await transaction.RollbackAsync();
+
             await PopulateCategoryOptionsAsync(model);
+
             return View(model);
         }
 
@@ -300,8 +345,10 @@ public class EventsController : Controller
         eventItem.Capacity = model.Capacity!.Value;
 
         await _context.SaveChangesAsync();
+        await transaction.CommitAsync();
+
         TempData["StatusMessage"] = $"{eventItem.Title} was updated.";
-        
+
         return RedirectToAction(nameof(Manage));
     }
 
@@ -388,21 +435,56 @@ public class EventsController : Controller
     public async Task<IActionResult> DeleteConfirmed(int id)
     {
         var organizer = await _userManager.GetUserAsync(User);
-        if (organizer is null) return Challenge();
 
-        var eventItem = await _context.Events.FirstOrDefaultAsync(item => item.Id == id && item.OrganizerId == organizer.Id);
-        if (eventItem is null) return NotFound();
+        if (organizer is null)
+        {
+            return Challenge();
+        }
+
+        await using var transaction = await _context.Database.BeginTransactionAsync();
+
+        var eventItem = await LoadOwnedEventForUpdateAsync(id, organizer.Id);
+
+        if (eventItem is null)
+        {
+            await transaction.RollbackAsync();
+            return NotFound();
+        }
 
         if (eventItem.Status != EventStatus.Draft)
         {
+            await transaction.RollbackAsync();
+
             TempData["ErrorMessage"] = "Only a Draft Event can be permanently deleted.";
+
+            return RedirectToAction(nameof(Manage));
+        }
+
+        var hasCurrentRegistrations = await _context.Registrations.AnyAsync(registration =>
+                    registration.EventId == eventItem.Id);
+
+        if (hasCurrentRegistrations)
+        {
+            await transaction.RollbackAsync();
+
+            TempData["ErrorMessage"] = "This Draft Event cannot be deleted while current Registrations exist.";
+
             return RedirectToAction(nameof(Manage));
         }
 
         _context.Events.Remove(eventItem);
+
         await _context.SaveChangesAsync();
+        await transaction.CommitAsync();
+
         TempData["StatusMessage"] = $"{eventItem.Title} was permanently deleted.";
+
         return RedirectToAction(nameof(Manage));
+    }
+
+    private Task<Event?> LoadOwnedEventForUpdateAsync(int id, string organizerId)
+    {
+        return _context.Events.FromSqlInterpolated($"SELECT * FROM [Events] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = {id} AND [OrganizerId] = {organizerId}").SingleOrDefaultAsync();
     }
 
     private async Task PopulateCategoryOptionsAsync(EventInputModel model)
