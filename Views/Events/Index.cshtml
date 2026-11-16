@@ -1,18 +1,176 @@
-@model string
+@model CampusEvents.ViewModels.EventSearchViewModel
 
 @{
     ViewData["Title"] = "Events";
 }
 
-<h1>Campus Events</h1>
+<h1>Upcoming Campus Events</h1>
 
-<p>
-    This is the first CEMS Events page. Event information is temporary in
-    Lesson 1 and is not loaded from a database.
-</p>
+<form asp-controller="Events"
+    asp-action="Index"
+    method="get"
+    class="event-filter-form"
+    aria-label="Search and filter campus events">
 
-<section>
-    <h2>Temporary Event Preview2</h2>
-    <p><strong>@Model</strong></p>
-    <p>Student Center</p>
-</section>
+  <div class="event-filter-field">
+    <label for="search" class="event-filter-label">Search title or location</label>
+    <input id="search"
+        name="search"
+        type="search"
+        class="event-filter-control"
+        value="@Model.Search"
+        aria-describedby="searchHelp" />
+    <div id="searchHelp" class="event-filter-help">
+      Matches Event title or location.
+    </div>
+  </div>
+
+  <div class="event-filter-field">
+    <label for="categoryId" class="event-filter-label">Category</label>
+    <select id="categoryId"
+        name="categoryId"
+        class="event-filter-control">
+      <option value="">All categories</option>
+
+      @foreach (var category in Model.Categories)
+      {
+        if (Model.CategoryId == category.Id)
+        {
+          <option value="@category.Id" selected>@category.Name</option>
+        }
+        else
+        {
+          <option value="@category.Id">@category.Name</option>
+        }
+      }
+    </select>
+  </div>
+
+  <div class="event-filter-field">
+    <label for="pageSize" class="event-filter-label">Events per page</label>
+    <select id="pageSize"
+        name="pageSize"
+        class="event-filter-control">
+      @foreach (var pageSizeOption in Model.PageSizeOptions)
+      {
+        if (Model.PageSize == pageSizeOption)
+        {
+          <option value="@pageSizeOption" selected>@pageSizeOption</option>
+        }
+        else
+        {
+          <option value="@pageSizeOption">@pageSizeOption</option>
+        }
+      }
+    </select>
+  </div>
+
+  <div class="event-filter-actions">
+    <button type="submit" class="event-filter-submit">
+      Apply filters
+    </button>
+
+    <a asp-controller="Events"
+       asp-action="Index"
+       asp-route-pageSize="@Model.PageSize"
+       class="event-filter-clear">
+      Clear
+    </a>
+  </div>
+</form>
+
+@if (Model.TotalCount > 0)
+{
+  var firstResult = (Model.CurrentPage - 1) * Model.PageSize + 1;
+  var lastResult = firstResult + Model.Events.Count - 1;
+
+  <p class="event-result-count">
+    Showing @firstResult–@lastResult of @Model.TotalCount events.
+  </p>
+}
+
+@if (Model.Events.Count == 0)
+{
+  <p role="status">
+    No published upcoming events match your current criteria.
+  </p>
+}
+else
+{
+  <section aria-labelledby="event-list-heading">
+    <h2 id="event-list-heading" class="cems-visually-hidden">
+      Published upcoming events
+    </h2>
+
+    @foreach (var eventItem in Model.Events)
+    {
+      <article class="event-card">
+        <h3 class="event-card-title">
+          <a asp-controller="Events"
+             asp-action="Details"
+             asp-route-id="@eventItem.Id">
+            @eventItem.Title
+          </a>
+        </h3>
+
+        <p><strong>Category:</strong> @eventItem.Category.Name</p>
+        <p><strong>Location:</strong> @eventItem.Location</p>
+        <p>
+          <strong>Starts:</strong>
+          <time>@eventItem.StartDateTime.ToString("f")</time>
+        </p>
+      </article>
+    }
+  </section>
+
+  <p class="event-page-status">
+    Page @Model.CurrentPage of @Model.TotalPages
+  </p>
+
+  @if (Model.TotalPages > 1)
+  {
+    <nav class="event-pagination" aria-label="Event results pages">
+      <div class="event-pagination-actions">
+        @if (Model.CurrentPage > 1)
+        {
+          <a asp-controller="Events"
+             asp-action="Index"
+             asp-route-search="@Model.Search"
+             asp-route-categoryId="@Model.CategoryId"
+             asp-route-pageSize="@Model.PageSize"
+             asp-route-page="1"
+             class="event-page-link">First</a>
+
+          <a asp-controller="Events"
+             asp-action="Index"
+             asp-route-search="@Model.Search"
+             asp-route-categoryId="@Model.CategoryId"
+             asp-route-pageSize="@Model.PageSize"
+             asp-route-page="@(Model.CurrentPage - 1)"
+             class="event-page-link"
+             rel="prev">Previous</a>
+        }
+
+        @if (Model.CurrentPage < Model.TotalPages)
+        {
+          <a asp-controller="Events"
+             asp-action="Index"
+             asp-route-search="@Model.Search"
+             asp-route-categoryId="@Model.CategoryId"
+             asp-route-pageSize="@Model.PageSize"
+             asp-route-page="@(Model.CurrentPage + 1)"
+             class="event-page-link"
+             rel="next">Next</a>
+
+          <a asp-controller="Events"
+             asp-action="Index"
+             asp-route-search="@Model.Search"
+             asp-route-categoryId="@Model.CategoryId"
+             asp-route-pageSize="@Model.PageSize"
+             asp-route-page="@Model.TotalPages"
+             class="event-page-link">Last</a>
+        }
+      </div>
+    </nav>
+  }
+}
