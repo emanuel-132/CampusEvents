@@ -2,6 +2,7 @@ using CampusEvents.Data;
 using CampusEvents.Models;
 using CampusEvents.Security;
 using CampusEvents.ViewModels;
+using CampusEvents.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
@@ -360,11 +361,17 @@ public class EventsController : Controller
         var organizer = await _userManager.GetUserAsync(User);
         if (organizer is null) return Challenge();
 
-        var eventItem = await _context.Events.FirstOrDefaultAsync(item => item.Id == id && item.OrganizerId == organizer.Id);
-        if (eventItem is null) return NotFound(); 
+        await using var transaction = await _context.Database.BeginTransactionAsync();
+        var eventItem = await EventWriteLock.LoadAsync(_context, id);
+        if (eventItem is null || eventItem.OrganizerId != organizer.Id)
+        {
+            await transaction.RollbackAsync();
+            return NotFound();
+        }
 
         if (eventItem.Status != EventStatus.Draft)
         {
+            await transaction.RollbackAsync();
             TempData["ErrorMessage"] = "Only a Draft Event can be published.";
             return RedirectToAction(nameof(Manage));
         }
@@ -372,12 +379,14 @@ public class EventsController : Controller
         var now = _timeProvider.GetLocalNow().DateTime;
         if (eventItem.StartDateTime <= now)
         {
+            await transaction.RollbackAsync();
             TempData["ErrorMessage"] = "A Draft Event can be published only before its start date and time.";
             return RedirectToAction(nameof(Manage));
         }
 
         eventItem.Status = EventStatus.Published;
         await _context.SaveChangesAsync();
+        await transaction.CommitAsync();
         TempData["StatusMessage"] = $"{eventItem.Title} was published.";
         return RedirectToAction(nameof(Manage));
     }
@@ -390,11 +399,18 @@ public class EventsController : Controller
         var organizer = await _userManager.GetUserAsync(User);
         if (organizer is null) return Challenge();
 
-        var eventItem = await _context.Events.FirstOrDefaultAsync(item => item.Id == id && item.OrganizerId == organizer.Id);
-        if (eventItem is null) return NotFound();
+        await using var transaction = await _context.Database.BeginTransactionAsync();
+        var eventItem = await EventWriteLock.LoadAsync(_context, id);
+        
+        if (eventItem is null || eventItem.OrganizerId != organizer.Id)
+        {
+            await transaction.RollbackAsync();
+            return NotFound();
+        }
 
         if (eventItem.Status != EventStatus.Published)
         {
+            await transaction.RollbackAsync();
             TempData["ErrorMessage"] = "Only a Published Event can be cancelled.";
             return RedirectToAction(nameof(Manage));
         }
@@ -402,12 +418,14 @@ public class EventsController : Controller
         var now = _timeProvider.GetLocalNow().DateTime;
         if (eventItem.StartDateTime <= now)
         {
+            await transaction.RollbackAsync();
             TempData["ErrorMessage"] = "A Published Event can be cancelled only before it starts.";
             return RedirectToAction(nameof(Manage));
         }
 
         eventItem.Status = EventStatus.Cancelled;
         await _context.SaveChangesAsync();
+        await transaction.CommitAsync();
         TempData["StatusMessage"] = $"{eventItem.Title} was cancelled.";
         return RedirectToAction(nameof(Manage));
     }
@@ -482,9 +500,10 @@ public class EventsController : Controller
         return RedirectToAction(nameof(Manage));
     }
 
-    private Task<Event?> LoadOwnedEventForUpdateAsync(int id, string organizerId)
+    private async Task<Event?> LoadOwnedEventForUpdateAsync(int id, string organizerId)
     {
-        return _context.Events.FromSqlInterpolated($"SELECT * FROM [Events] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = {id} AND [OrganizerId] = {organizerId}").SingleOrDefaultAsync();
+        var eventItem = await EventWriteLock.LoadAsync(_context, id);
+        return eventItem?.OrganizerId == organizerId ? eventItem : null;
     }
 
     private async Task PopulateCategoryOptionsAsync(EventInputModel model)
@@ -515,5 +534,54 @@ public class EventsController : Controller
                 nameof(model.CategoryId),
                 "Select an existing Category.");
         }
+    }
+    
+    [HttpGet]
+    [Authorize(Roles = RoleNames.Organizer)]
+    public async Task<IActionResult> Registrations(int id)
+    {
+        var organizer = await _userManager.GetUserAsync(User);
+
+        if (organizer is null)
+        {
+            return Challenge();
+        }
+
+        var hasAdministratorAccess = User.IsInRole(RoleNames.Administrator);
+        var eventInfo = await _context.Events
+            .AsNoTracking()
+            .Where(eventItem => eventItem.Id == id &&
+                (eventItem.OrganizerId == organizer.Id || hasAdministratorAccess))
+            .Select(eventItem => new { eventItem.Id, eventItem.Title, eventItem.Capacity })
+            .SingleOrDefaultAsync();
+
+        if (eventInfo is null)
+        {
+            return NotFound();
+        }
+
+        var participants = await _context.Registrations
+            .AsNoTracking()
+            .Where(registration => registration.EventId == eventInfo.Id)
+            .OrderBy(registration => registration.CreatedAt)
+            .ThenBy(registration => registration.Id)
+            .Select(registration => new OrganizerRegistrationParticipantViewModel
+            {
+                DisplayName = registration.User.DisplayName,
+                Email = registration.User.Email ?? string.Empty,
+                RegisteredAt = registration.CreatedAt
+            })
+            .ToListAsync();
+
+        var count = participants.Count;
+        return View(new OrganizerRegistrationViewModel
+        {
+            EventId = eventInfo.Id,
+            EventTitle = eventInfo.Title,
+            Capacity = eventInfo.Capacity,
+            CurrentRegistrationCount = count,
+            RemainingCapacity = Math.Max(0, eventInfo.Capacity - count),
+            Participants = participants
+        });
     }
 }
